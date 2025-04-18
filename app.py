@@ -13,7 +13,8 @@ def connect_db():
         host=st.secrets["mysql"]["host"],
         user=st.secrets["mysql"]["user"],
         password=st.secrets["mysql"]["password"],
-        database=st.secrets["mysql"]["database"]
+        database=st.secrets["mysql"]["database"],
+        port=st.secrets["mysql"]["port"]
     )
 
 # -------- Password Hashing --------
@@ -26,8 +27,7 @@ def register_user(username, password, full_name):
     cursor = conn.cursor()
     hashed = hash_password(password)
     try:
-        cursor.execute('INSERT INTO users (username, password, full_name) VALUES (%s, %s, %s)',
-                       (username, hashed, full_name))
+        cursor.execute('INSERT INTO users (username, password, full_name) VALUES (%s, %s, %s)', (username, hashed, full_name))
         conn.commit()
         return True
     except mysql.connector.IntegrityError:
@@ -50,9 +50,10 @@ def login_user(username, password):
 def create_entry(user_id, household_name, father_name, mobile_no, address, dustbin_number, image_bytes):
     conn = connect_db()
     cursor = conn.cursor()
-    cursor.execute('''INSERT INTO entries (user_id, household_name, father_name, mobile_no, address, dustbin_number, image)
-                      VALUES (%s, %s, %s, %s, %s, %s, %s)''',
-                   (user_id, household_name, father_name, mobile_no, address, dustbin_number, image_bytes))
+    cursor.execute('''
+        INSERT INTO entries (user_id, household_name, father_name, mobile_no, address, dustbin_number, image)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+    ''', (user_id, household_name, father_name, mobile_no, address, dustbin_number, image_bytes))
     conn.commit()
     cursor.close()
     conn.close()
@@ -78,8 +79,11 @@ def get_entry(entry_id):
 def update_entry(entry_id, household_name, father_name, mobile_no, address, dustbin_number):
     conn = connect_db()
     cursor = conn.cursor()
-    cursor.execute('''UPDATE entries SET household_name=%s, father_name=%s, mobile_no=%s, address=%s, dustbin_number=%s WHERE id=%s''',
-                   (household_name, father_name, mobile_no, address, dustbin_number, entry_id))
+    cursor.execute('''
+        UPDATE entries
+        SET household_name=%s, father_name=%s, mobile_no=%s, address=%s, dustbin_number=%s
+        WHERE id=%s
+    ''', (household_name, father_name, mobile_no, address, dustbin_number, entry_id))
     conn.commit()
     cursor.close()
     conn.close()
@@ -169,13 +173,11 @@ def page_register():
 def page_login():
     st.title("🔑 Login")
 
-    st.markdown(
-        """
-        <h3 style='text-align: center; color: green;'>Nagar Nigam Greater Jaipur</h3>
-        <h4 style='text-align: center; color: green;'>Murlipura Zone, Ward No. 25</h4>
-        <h5 style='text-align: center; color: green;'>Swachh Bharat Mission</h5>
-        """, unsafe_allow_html=True
-    )
+    st.markdown("""
+    <h3 style='text-align: center; color: green;'>Nagar Nigam Greater Jaipur</h3>
+    <h4 style='text-align: center; color: green;'>Murlipura Zone, Ward No. 25</h4>
+    <h5 style='text-align: center; color: green;'>Swachh Bharat Mission</h5>
+    """, unsafe_allow_html=True)
 
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
@@ -225,7 +227,6 @@ def page_entries():
             ])
 
         df = pd.DataFrame(table_data, columns=["S.No", "Household Name", "Father Name", "Mobile No.", "Address", "Dustbin No", "Image"])
-
         st.markdown(df.to_html(escape=False, index=False), unsafe_allow_html=True)
 
         if st.button("🔖 Download PDF"):
