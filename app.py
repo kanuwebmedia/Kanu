@@ -1,129 +1,140 @@
+# --- Swachh Bharat App without MySQL (with local storage + better UI) ---
+
 import streamlit as st
-import mysql.connector
 import hashlib
-import io
-from PIL import Image
+import json
+import os
 import pandas as pd
 from fpdf import FPDF
 import base64
+from datetime import datetime
 
-# -------- Database Connection --------
-def connect_db():
-    return mysql.connector.connect(
-        host=st.secrets["mysql"]["host"],
-        user=st.secrets["mysql"]["user"],
-        password=st.secrets["mysql"]["password"],
-        database=st.secrets["mysql"]["database"],
-        port=st.secrets["mysql"]["port"]
-    )
+# ------------ Helper Functions ------------
 
-# -------- Password Hashing --------
+DATA_FILE = 'data.json'
+
+# Create data file if doesn't exist
+def init_data():
+    if not os.path.exists(DATA_FILE):
+        with open(DATA_FILE, 'w') as f:
+            json.dump({"users": [], "entries": []}, f)
+
+def load_data():
+    with open(DATA_FILE, 'r') as f:
+        return json.load(f)
+
+def save_data(data):
+    with open(DATA_FILE, 'w') as f:
+        json.dump(data, f, indent=4)
+
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-# -------- Auth Functions --------
+# ------------ Auth Functions ------------
+
 def register_user(username, password, full_name):
-    conn = connect_db()
-    cursor = conn.cursor()
-    hashed = hash_password(password)
-    try:
-        cursor.execute('INSERT INTO users (username, password, full_name) VALUES (%s, %s, %s)',
-                       (username, hashed, full_name))
-        conn.commit()
-        return True
-    except mysql.connector.IntegrityError:
+    data = load_data()
+    if any(u['username'] == username for u in data['users']):
         return False
-    finally:
-        cursor.close()
-        conn.close()
+    new_user = {
+        "id": len(data['users']) + 1,
+        "username": username,
+        "password": hash_password(password),
+        "full_name": full_name
+    }
+    data['users'].append(new_user)
+    save_data(data)
+    return True
 
 def login_user(username, password):
-    conn = connect_db()
-    cursor = conn.cursor(dictionary=True)
+    data = load_data()
     hashed = hash_password(password)
-    cursor.execute('SELECT * FROM users WHERE username=%s AND password=%s', (username, hashed))
-    user = cursor.fetchone()
-    cursor.close()
-    conn.close()
-    return user
+    for user in data['users']:
+        if user['username'] == username and user['password'] == hashed:
+            return user
+    return None
 
-# -------- CRUD Functions --------
+# ------------ CRUD Functions ------------
+
 def create_entry(user_id, household_name, father_name, mobile_no, address, dustbin_number, image_bytes):
-    conn = connect_db()
-    cursor = conn.cursor()
-    cursor.execute('''INSERT INTO entries (user_id, household_name, father_name, mobile_no, address, dustbin_number, image)
-                      VALUES (%s, %s, %s, %s, %s, %s, %s)''',
-                   (user_id, household_name, father_name, mobile_no, address, dustbin_number, image_bytes))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    data = load_data()
+    new_entry = {
+        "id": len(data['entries']) + 1,
+        "user_id": user_id,
+        "household_name": household_name,
+        "father_name": father_name,
+        "mobile_no": mobile_no,
+        "address": address,
+        "dustbin_number": dustbin_number,
+        "image": base64.b64encode(image_bytes).decode() if image_bytes else None,
+        "created_at": datetime.now().isoformat()
+    }
+    data['entries'].append(new_entry)
+    save_data(data)
 
 def get_entries(user_id):
-    conn = connect_db()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute('SELECT * FROM entries WHERE user_id=%s ORDER BY created_at DESC', (user_id,))
-    entries = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    return entries
+    data = load_data()
+    return [e for e in data['entries'] if e['user_id'] == user_id]
 
 def get_entry(entry_id):
-    conn = connect_db()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute('SELECT * FROM entries WHERE id=%s', (entry_id,))
-    entry = cursor.fetchone()
-    cursor.close()
-    conn.close()
-    return entry
+    data = load_data()
+    for e in data['entries']:
+        if e['id'] == entry_id:
+            return e
+    return None
 
 def update_entry(entry_id, household_name, father_name, mobile_no, address, dustbin_number):
-    conn = connect_db()
-    cursor = conn.cursor()
-    cursor.execute('''UPDATE entries SET household_name=%s, father_name=%s, mobile_no=%s, address=%s, dustbin_number=%s WHERE id=%s''',
-                   (household_name, father_name, mobile_no, address, dustbin_number, entry_id))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    data = load_data()
+    for e in data['entries']:
+        if e['id'] == entry_id:
+            e['household_name'] = household_name
+            e['father_name'] = father_name
+            e['mobile_no'] = mobile_no
+            e['address'] = address
+            e['dustbin_number'] = dustbin_number
+    save_data(data)
 
 def delete_entry(entry_id):
-    conn = connect_db()
-    cursor = conn.cursor()
-    cursor.execute('DELETE FROM entries WHERE id=%s', (entry_id,))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    data = load_data()
+    data['entries'] = [e for e in data['entries'] if e['id'] != entry_id]
+    save_data(data)
 
-# -------- PDF Export Function --------
+# ------------ PDF Export ------------
+
 def export_to_pdf(entries):
     pdf = FPDF()
     pdf.set_font("Arial", size=10)
     pdf.add_page()
 
-    pdf.cell(200, 10, txt="My Entries Report", ln=True, align="C")
+    pdf.cell(200, 10, txt="Entries Report", ln=True, align="C")
     pdf.ln(10)
 
     for idx, entry in enumerate(entries, 1):
-        pdf.cell(0, 10, f"{idx}. Household: {entry['household_name']}, Father: {entry['father_name']}, Mobile: {entry['mobile_no']}", ln=True)
+        pdf.cell(0, 10, f"{idx}. {entry['household_name']} ({entry['father_name']}), Mobile: {entry['mobile_no']}", ln=True)
         pdf.cell(0, 10, f"Address: {entry['address']}, Dustbin No: {entry['dustbin_number']}", ln=True)
         pdf.ln(5)
 
     return pdf.output(dest='S').encode('latin1')
 
-# -------- Streamlit App --------
+# ------------ Streamlit UI ------------
+
 def main():
-    st.set_page_config(page_title="Swachh Bharat App", page_icon="🌿", layout="centered")
+    st.set_page_config(page_title="Swachh Bharat App", page_icon="🌿", layout="wide")
+
+    init_data()
+
+    st.markdown("""
+        <style>
+            .main {background-color: #f8f9fa; padding:20px; border-radius:10px;}
+            .title {text-align: center; color: green;}
+            .stButton>button {background-color: #4CAF50; color: white;}
+        </style>
+    """, unsafe_allow_html=True)
 
     if 'user' not in st.session_state:
         st.session_state.user = None
 
-    if 'page' not in st.session_state:
-        st.session_state.page = 'Home'
-
-    if st.session_state.user:
-        menu = ["Home", "My Entries", "Edit Entry", "Delete Entry", "Logout"]
-    else:
-        menu = ["Login", "Register"]
-
+    menu = ["Home", "Register", "Login", "Logout"] if not st.session_state.user else ["Home", "New Entry", "My Entries", "Logout"]
     choice = st.sidebar.selectbox("Navigation", menu)
 
     if choice == "Register":
@@ -131,66 +142,49 @@ def main():
     elif choice == "Login":
         page_login()
     elif choice == "Home":
-        if st.session_state.user:
-            page_home()
-        else:
-            st.error("Please login first!")
+        page_home()
+    elif choice == "New Entry":
+        page_new_entry()
     elif choice == "My Entries":
-        if st.session_state.user:
-            page_entries()
-        else:
-            st.error("Please login first!")
-    elif choice == "Edit Entry":
-        if st.session_state.user:
-            page_edit()
-        else:
-            st.error("Please login first!")
-    elif choice == "Delete Entry":
-        if st.session_state.user:
-            page_delete()
-        else:
-            st.error("Please login first!")
+        page_entries()
     elif choice == "Logout":
         st.session_state.user = None
         st.success("Logged out successfully!")
-        st.rerun()
 
-# -------- Pages --------
+# ------------ Pages ------------
+
 def page_register():
-    st.title("📝 Register")
+    st.title("📅 Register")
     username = st.text_input("Username")
     full_name = st.text_input("Full Name")
     password = st.text_input("Password", type="password")
     if st.button("Register"):
         if register_user(username, password, full_name):
-            st.success("Registration successful. Now login!")
+            st.success("Registration successful. Please login.")
         else:
             st.error("Username already exists.")
 
 def page_login():
     st.title("🔑 Login")
-
-    st.markdown(
-        """
-        <h3 style='text-align: center; color: green;'>Nagar Nigam Greater Jaipur</h3>
-        <h4 style='text-align: center; color: green;'>Murlipura Zone, Ward No. 25</h4>
-        <h5 style='text-align: center; color: green;'>Swachh Bharat Mission</h5>
-        """, unsafe_allow_html=True
-    )
-
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
     if st.button("Login"):
         user = login_user(username, password)
         if user:
             st.session_state.user = user
-            st.success(f"Welcome, {user['full_name']}!")
-            st.rerun()
+            st.success(f"Welcome {user['full_name']}!")
         else:
-            st.error("Invalid credentials.")
+            st.error("Invalid username or password.")
 
 def page_home():
-    st.title("🏠 Create New Entry")
+    st.title("🏠 Home")
+    if st.session_state.user:
+        st.success(f"Logged in as {st.session_state.user['full_name']}")
+    else:
+        st.info("Please login or register.")
+
+def page_new_entry():
+    st.title("📌 New Entry")
     household_name = st.text_input("Household Name")
     father_name = st.text_input("Father's Name")
     mobile_no = st.text_input("Mobile No.")
@@ -199,86 +193,25 @@ def page_home():
     picture = st.camera_input("Take a Picture")
 
     if st.button("Save Entry"):
-        image_bytes = picture.getvalue() if picture else None
-        create_entry(st.session_state.user['id'], household_name, father_name, mobile_no, address, dustbin_number, image_bytes)
+        img_bytes = picture.getvalue() if picture else None
+        create_entry(st.session_state.user['id'], household_name, father_name, mobile_no, address, dustbin_number, img_bytes)
         st.success("Entry saved successfully!")
-        st.rerun()
 
 def page_entries():
-    st.title("📋 My Entries")
+    st.title("📊 My Entries")
     entries = get_entries(st.session_state.user['id'])
 
     if entries:
-        table_data = []
-        for idx, entry in enumerate(entries, 1):
-            img = None
-            if entry['image']:
-                img_data = base64.b64encode(entry['image']).decode()
-                img = f'<img src="data:image/jpeg;base64,{img_data}" width="50"/>'
-            table_data.append([
-                idx,
-                entry['household_name'],
-                entry['father_name'],
-                entry['mobile_no'],
-                entry['address'],
-                entry['dustbin_number'],
-                img
-            ])
+        df = pd.DataFrame([{**e, "Image": "📷" if e['image'] else "No"} for e in entries])
+        st.dataframe(df[['household_name', 'father_name', 'mobile_no', 'address', 'dustbin_number', 'created_at', 'Image']])
 
-        df = pd.DataFrame(table_data, columns=["S.No", "Household Name", "Father Name", "Mobile No.", "Address", "Dustbin No", "Image"])
-
-        st.markdown(df.to_html(escape=False, index=False), unsafe_allow_html=True)
-
-        if st.button("🔖 Download PDF"):
+        if st.button("Download PDF Report"):
             pdf_data = export_to_pdf(entries)
-            st.download_button("Download PDF", data=pdf_data, file_name="entries.pdf", mime="application/pdf")
+            st.download_button("Download", data=pdf_data, file_name="entries.pdf", mime="application/pdf")
     else:
         st.info("No entries found.")
 
-def page_edit():
-    st.title("🔵 Edit Entry")
-    entries = get_entries(st.session_state.user['id'])
-    entry_options = {f"{entry['household_name']} ({entry['created_at']})": entry['id'] for entry in entries}
+# ------------ Run ------------
 
-    if not entry_options:
-        st.info("No entries to edit.")
-        return
-
-    selected = st.selectbox("Select Entry to Edit", list(entry_options.keys()))
-    entry_id = entry_options[selected]
-    entry = get_entry(entry_id)
-
-    household_name = st.text_input("Household Name", entry['household_name'])
-    father_name = st.text_input("Father's Name", entry['father_name'])
-    mobile_no = st.text_input("Mobile No.", entry['mobile_no'])
-    address = st.text_area("Address", entry['address'])
-    dustbin_number = st.number_input("Dustbin Number", min_value=0, step=1, value=entry['dustbin_number'])
-
-    if st.button("Save Changes"):
-        update_entry(entry_id, household_name, father_name, mobile_no, address, dustbin_number)
-        st.success("Entry updated successfully!")
-        st.rerun()
-
-def page_delete():
-    st.title("🗑️ Delete Entry")
-    entries = get_entries(st.session_state.user['id'])
-    entry_options = {f"{entry['household_name']} ({entry['created_at']})": entry['id'] for entry in entries}
-
-    if not entry_options:
-        st.info("No entries to delete.")
-        return
-
-    selected = st.selectbox("Select Entry to Delete", list(entry_options.keys()))
-    entry_id = entry_options[selected]
-    entry = get_entry(entry_id)
-
-    st.warning(f"Are you sure you want to delete **{entry['household_name']}**?")
-
-    if st.button("Yes, Delete"):
-        delete_entry(entry_id)
-        st.success("Entry deleted successfully!")
-        st.rerun()
-
-# ------------------------
 if __name__ == "__main__":
     main()
